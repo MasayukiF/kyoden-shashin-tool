@@ -1,0 +1,20 @@
+{
+  "name": "工事写真アプリ（協電機工）",
+  "short_name": "工事写真",
+  "description": "工事写真を撮って電子小黒板をつけ、写真台帳をブラウザだけで作れるツール。写真は端末内にだけ保存。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "minimal-ui",
+  "orientation": "any",
+  "background_color": "#f4f6f8",
+  "theme_color": "#1f3a5f",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
