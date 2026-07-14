@@ -350,19 +350,27 @@ function wareki(iso){ if(!iso) return ''; const d=new Date(iso+'T00:00:00'); if(
   return `${g}${nn}年${d.getMonth()+1}月${d.getDate()}日`; }
 function todayISO(){ const d=new Date(); const z=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`; }
 
-/* ---- 画像を縮小してBlob化 ---- */
-function resizeToBlob(file, maxEdge=1920, quality=0.8){ return new Promise((res,rej)=>{
+/* ---- 画像を縮小してdataURL化 ----
+   ※ iOS SafariはIndexedDBにBlobを入れると読み出し時に空になる不具合があるため、
+     画像は dataURL（文字列）で保存する。文字列はどのブラウザでも確実に往復できる。 */
+function resizeToDataURL(file, maxEdge=1920, quality=0.8){ return new Promise((res,rej)=>{
   const img=new Image(); const url=URL.createObjectURL(file);
-  img.onload=()=>{ URL.revokeObjectURL(url);
+  img.onload=()=>{
     let {width:w,height:h}=img;
+    if(!w||!h){ URL.revokeObjectURL(url); rej(new Error('画像サイズを取得できませんでした')); return; }
     if(Math.max(w,h)>maxEdge){ const r=maxEdge/Math.max(w,h); w=Math.round(w*r); h=Math.round(h*r); }
     const cv=document.getElementById('workCanvas'); cv.width=w; cv.height=h;
-    cv.getContext('2d').drawImage(img,0,0,w,h);
-    cv.toBlob(b=>res({blob:b,w,h}),'image/jpeg',quality);
+    const ctx=cv.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+    URL.revokeObjectURL(url);
+    let dataURL;
+    try{ dataURL=cv.toDataURL('image/jpeg',quality); }catch(e){ rej(e); return; }
+    if(!dataURL || dataURL.length<100){ rej(new Error('画像を変換できませんでした')); return; }
+    res({dataURL,w,h});
   };
-  img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error('画像を読めませんでした')); };
+  img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error('画像を読めませんでした（対応していない形式かもしれません）')); };
   img.src=url;
 }); }
+function dataURLtoU8(d){ const b64=d.split(',')[1]||''; const s=atob(b64); const u=new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }
 
 /* ---- 写真追加 ---- */
 async function addPhotos(files){
@@ -371,21 +379,22 @@ async function addPhotos(files){
   const arr=[...files].filter(f=>f.type.startsWith('image/'));
   if(!arr.length) return;
   document.getElementById('countInfo').textContent='取り込み中… 0/'+arr.length;
-  let i=0;
+  let i=0, fail=0;
   for(const f of arr){
     try{
-      const {blob,w,h}=await resizeToBlob(f);
+      const {dataURL,w,h}=await resizeToDataURL(f);
       const id=uid();
-      const rec={ id, projectId:pid, full:blob, w, h,
+      const rec={ id, projectId:pid, full:dataURL, w, h,
         koushu:lastKoushu||'', shubetsu:'', saibetsu:'', jokyo:'', date:todayISO(),
         sokuten:'', shakou:(curProject().corp||'協電機工株式会社'), satsuei:lastSatsuei||'', tachiai:'', sunpou:'', comment:'',
         pos:'bl', size:'', show:true, order:Date.now()+i };
       await idbPut(rec);
-    }catch(e){ console.warn(e); }
+    }catch(e){ fail++; console.warn('写真の取り込み失敗:',e); }
     i++; document.getElementById('countInfo').textContent='取り込み中… '+i+'/'+arr.length;
   }
   await renderAlbums();
   updateStoreInfo();
+  if(fail) alert(fail+'枚の写真が取り込めませんでした（対応していない形式か、容量不足の可能性）。もう一度お試しください。');
 }
 
 /* ---- ギャラリー描画 ---- */
@@ -419,7 +428,7 @@ async function renderAlbums(){
   for(const k of Object.keys(groups)){
     html+='<div class="album"><h3>'+esc(k)+'（'+groups[k].length+'枚）</h3><div class="gallery">';
     for(const r of groups[k]){
-      const url=URL.createObjectURL(r.full); _urlCache.push(url);
+      const url=r.full; // dataURL文字列
       const bt=esc(boardText(r));
       const bp=r.show!==false ? '<div class="board-preview '+r.pos+'">'+bt+'</div>' : '';
       html+='<div class="card">'
@@ -482,8 +491,7 @@ function onKoushuChange(){
 }
 async function openEditor(id){
   const r=await idbGet(id); if(!r) return; editId=id;
-  const url=URL.createObjectURL(r.full); _urlCache.push(url);
-  previewImg.src=url;
+  previewImg.src=r.full; // dataURL文字列
   fillKoushuSelect(e_koushu, r.koushu);
   onKoushuChange(); e_shubetsu.value=r.shubetsu||'';
   e_jokyo.value=r.jokyo||''; e_date.value=r.date||todayISO();
@@ -561,7 +569,7 @@ async function buildDaichou(){
         +'<span class="dpageno">'+pageNo+' / '+tp+'</span></div>'
         +'<div class="photogrid '+gcls+'">';
       for(const r of chunk){
-        const url=URL.createObjectURL(r.full); _urlCache.push(url);
+        const url=r.full; // dataURL文字列
         const bt=esc(boardText(r));
         const bp=r.show!==false?'<div class="board-daichou '+r.pos+'">'+bt+'</div>':'';
         html+='<div class="pcell"><div class="pimgwrap"><img src="'+url+'">'+bp+'</div>'
@@ -580,10 +588,10 @@ async function buildDaichou(){
 function row(k,v){ return '<tr><td class="k">'+esc(k)+'</td><td>'+esc(v||'')+'</td></tr>'; }
 function info(k,v){ return v?'<div><span class="k">'+esc(k)+'</span>'+esc(v)+'</div>':''; }
 
-/* ---- 黒板焼き込み（Canvas合成）→ JPEG Blob ---- */
+/* ---- 黒板焼き込み（Canvas合成）→ JPEG dataURL ---- */
 function burnBoard(rec){ return new Promise((res)=>{
-  const img=new Image(); const url=URL.createObjectURL(rec.full);
-  img.onload=()=>{ URL.revokeObjectURL(url);
+  const img=new Image();
+  img.onload=()=>{
     const cv=document.getElementById('workCanvas'); cv.width=img.width; cv.height=img.height;
     const ctx=cv.getContext('2d'); ctx.drawImage(img,0,0);
     if(rec.show!==false){
@@ -602,10 +610,10 @@ function burnBoard(rec){ return new Promise((res)=>{
       ctx.fillStyle='#fff'; ctx.textBaseline='top';
       lines.forEach((l,i)=>{ ctx.fillText(l, x+padx, y+pady+i*lh); });
     }
-    cv.toBlob(b=>res(b),'image/jpeg',0.85);
+    res(cv.toDataURL('image/jpeg',0.85));
   };
   img.onerror=()=>res(rec.full);
-  img.src=url;
+  img.src=rec.full;
 }); }
 
 /* ---- ZIP(store方式・CRC32自前) ---- */
@@ -641,7 +649,6 @@ function makeZip(files){ // files:[{name,data(Uint8Array)}]
   chunks.push(new Uint8Array(eo.buffer));
   return new Blob(chunks,{type:'application/zip'});
 }
-function blobToU8(b){ return b.arrayBuffer().then(a=>new Uint8Array(a)); }
 
 async function exportPhotosZip(){
   const p=curProject()||{};
@@ -651,7 +658,7 @@ async function exportPhotosZip(){
   const files=[]; const csv=['連番,工種,種別,細別,施工状況,測点位置,撮影日,立会,寸法,コメント,ファイル名'];
   let n=0; const pad=x=>String(x).padStart(3,'0');
   for(const r of all){
-    n++; const b=await burnBoard(r); const u8=await blobToU8(b);
+    n++; const burned=await burnBoard(r); const u8=dataURLtoU8(burned);
     const safe=(r.koushu||'工種なし').replace(/[\\\/:*?"<>|]/g,'_');
     const fn=pad(n)+'_'+safe+'_'+(r.shubetsu||'').replace(/[\\\/:*?"<>|]/g,'_')+'.jpg';
     files.push({name:fn,data:u8});
@@ -663,14 +670,11 @@ async function exportPhotosZip(){
   dl(zip,(p.name||'工事写真')+'_写真.zip');
 }
 
-/* ---- まるごとバックアップ（復元用JSON・base64画像）---- */
-function b64FromU8(u8){ let s=''; const CH=0x8000; for(let i=0;i<u8.length;i+=CH) s+=String.fromCharCode.apply(null,u8.subarray(i,i+CH)); return btoa(s); }
-function u8FromB64(b64){ const s=atob(b64); const u=new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }
+/* ---- まるごとバックアップ（復元用JSON・dataURL画像）---- */
 async function exportBackup(){
   const all=await idbAll();
-  const photos=[];
-  for(const r of all){ const u8=await blobToU8(r.full); const {full,...meta}=r; photos.push({...meta, img:b64FromU8(u8)}); }
-  const backup={ app:'kyoden-shashin', ver:1, state, photos };
+  const photos=all.map(r=>{ const {full,...meta}=r; return {...meta, img:full}; }); // fullはdataURL文字列
+  const backup={ app:'kyoden-shashin', ver:2, state, photos };
   dl(new Blob([JSON.stringify(backup)],{type:'application/json'}),'工事写真_バックアップ.json');
 }
 async function importBackup(file){
@@ -685,7 +689,12 @@ async function importBackup(file){
     state.seq=Math.max(state.seq||1, bk.state.seq||1);
     if(!state.currentId) state.currentId=bk.state.currentId||(state.projects[0]&&state.projects[0].id);
     saveState();
-    for(const ph of (bk.photos||[])){ const {img,...meta}=ph; const blob=new Blob([u8FromB64(img)],{type:'image/jpeg'}); await idbPut({...meta, full:blob}); }
+    for(const ph of (bk.photos||[])){
+      const {img,...meta}=ph;
+      // ver2はdataURL文字列。ver1(旧base64)が来たらdataURLに包み直す
+      const full = (typeof img==='string' && img.indexOf('data:')===0) ? img : ('data:image/jpeg;base64,'+img);
+      await idbPut({...meta, full});
+    }
     renderProjSel(); fillProjFields(); renderAlbums(); updateStoreInfo();
     alert('復元しました。');
   }catch(e){ alert('このファイルは復元できませんでした：'+e.message); }
