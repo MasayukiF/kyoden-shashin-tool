@@ -58,6 +58,7 @@
   .card .cap b{ color:#1f3a5f; }
   .card .cardacts{ display:flex; justify-content:space-between; padding:2px 6px 6px; }
   .board-preview{ position:absolute; background:rgba(20,90,40,.92); color:#fff; border:2px solid #fff; border-radius:2px; font-size:8px; line-height:1.25; padding:2px 4px; max-width:70%; white-space:pre-wrap; }
+  .board-preview.xs{ font-size:6.5px; } .board-preview.small{ font-size:7.5px; } .board-preview.large{ font-size:9.5px; }
   .board-preview.tl{ top:4px; left:4px; } .board-preview.tr{ top:4px; right:4px; }
   .board-preview.bl{ bottom:4px; left:4px; } .board-preview.br{ bottom:4px; right:4px; }
   .badge{ position:absolute; top:4px; left:4px; background:#1f3a5f; color:#fff; font-size:10px; padding:1px 6px; border-radius:10px; }
@@ -73,7 +74,7 @@
   .previewbox{ position:relative; width:100%; aspect-ratio:4/3; background:#222; border-radius:6px; overflow:hidden; }
   .previewbox img{ width:100%; height:100%; object-fit:contain; display:block; }
   .board-live{ position:absolute; background:rgba(20,90,40,.92); color:#fff; border:2px solid #fff; border-radius:3px; padding:5px 8px; font-size:12px; line-height:1.35; max-width:78%; white-space:pre-wrap; }
-  .board-live.small{ font-size:10px; } .board-live.large{ font-size:15px; }
+  .board-live.xs{ font-size:8px; } .board-live.small{ font-size:10px; } .board-live.large{ font-size:15px; }
   .board-live.tl{ top:8px; left:8px; } .board-live.tr{ top:8px; right:8px; }
   .board-live.bl{ bottom:8px; left:8px; } .board-live.br{ bottom:8px; right:8px; }
 
@@ -99,6 +100,7 @@
   .photogrid.g3 .pcell .pinfo{ flex:1; }
   .pcell .pinfo .k{ color:#555; display:inline-block; min-width:3.5em; }
   .board-daichou{ position:absolute; background:rgba(20,90,40,.92); color:#fff; border:2px solid #fff; border-radius:2px; padding:3px 5px; font-size:9px; line-height:1.3; max-width:70%; white-space:pre-wrap; }
+  .board-daichou.xs{ font-size:7px; } .board-daichou.small{ font-size:8px; } .board-daichou.large{ font-size:11px; }
   .board-daichou.tl{ top:4px; left:4px; } .board-daichou.tr{ top:4px; right:4px; }
   .board-daichou.bl{ bottom:4px; left:4px; } .board-daichou.br{ bottom:4px; right:4px; }
   .cover{ text-align:center; padding-top:40mm; }
@@ -110,16 +112,45 @@
   .empty{ color:#889; font-size:13px; padding:10px 4px; }
 
   @media print{
-    body{ background:#fff; }
+    html,body{ background:#fff !important; }
     header.app, .no-print{ display:none !important; }
-    .wrap{ padding:0; max-width:none; }
-    #daichou{ }
-    .dpage{ border:none; margin:0; padding:10mm; page-break-after:always; }
-    .dpage:last-child{ page-break-after:auto; }
-    .pcell{ page-break-inside:avoid; }
-    @page{ margin:8mm; }
+    .wrap{ padding:0 !important; max-width:none !important; }
+    #daichou{ display:block !important; }
+    #daichou .empty{ display:none; }
+    /* 台帳ページ：印刷では用紙いっぱいに。枠・影・固定幅を外す */
+    /* min-heightは .dpage.a4 / .dpage.a3（画面用の297mm指定）の方が詳細度が高いので
+       !important を付けないと勝てない。付けないと1ページが用紙をはみ出して2ページに割れる。 */
+    .dpage, .dpage.a4, .dpage.a3{ width:auto !important; min-height:0 !important; height:auto !important;
+      border:none !important; margin:0 !important; padding:0 !important; box-shadow:none !important;
+      page-break-after:always; break-after:page; overflow:visible; }
+    .dpage:last-child{ page-break-after:auto; break-after:auto; }
+
+    /* ★iPhone(Safari)対策★
+       印刷エンジンでは grid と aspect-ratio が効かず、写真枠の高さが0に潰れて
+       「写真が出ない／1ページしか出ない」状態になる。
+       印刷時だけ float + 実寸(mm)指定に切り替えて、高さを必ず確保する。 */
+    .photogrid{ display:block !important; }
+    .photogrid::after{ content:""; display:block; clear:both; }
+    .pcell{ display:block !important; float:left; box-sizing:border-box; overflow:hidden;
+            page-break-inside:avoid; break-inside:avoid; margin:0 2mm 3mm 0; }
+    .pcell .pimgwrap{ display:block !important; position:relative; aspect-ratio:auto !important; overflow:hidden; background:#000; }
+    .pcell .pimgwrap img{ width:100%; height:100%; object-fit:contain;
+                          -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .pcell .pinfo{ display:block !important; }
+
+    /* A4タテ・3枚/頁（写真が左・情報が右） */
+    .dpage.a4 .pcell{ width:100%; height:86mm; }
+    .dpage.a4 .pcell .pimgwrap{ float:left; width:104mm; height:86mm; }
+    .dpage.a4 .pcell .pinfo{ margin-left:106mm; }
+
+    /* A3ヨコ・4枚/頁 と 6枚/頁（写真が上・情報が下） */
+    .dpage.a3 .photogrid.g4 .pcell{ width:196mm; height:128mm; }
+    .dpage.a3 .photogrid.g6 .pcell{ width:130mm; height:128mm; }
+    .dpage.a3 .pcell .pimgwrap{ width:100%; height:98mm; }
   }
 </style>
+<!-- 用紙サイズは台帳のレイアウトに合わせて buildDaichou() が動的に差し替える -->
+<style id="pagestyle">@page{ size:A4 portrait; margin:8mm; }</style>
 </head>
 <body>
 <header class="app">
@@ -194,10 +225,12 @@
         <button class="primary" onclick="buildDaichou()">台帳を組む／更新</button>
         <button class="go" onclick="window.print()">🖨 印刷・PDF保存</button>
       </div>
-      <p class="hint">工種の切れ目で改ページします。iPhoneは印刷ボタン→共有→プリント→ピンチアウトでPDF保存できます。</p>
-      <div id="daichou"><p class="empty">「台帳を組む」を押すとここに出ます。</p></div>
+      <p class="hint">工種の切れ目で改ページします。iPhoneは印刷ボタン→（「自動的に印刷…」と出たら<b>「許可」</b>）→共有→プリント→ピンチアウトでPDF保存できます。</p>
     </div>
   </div>
+
+  <!-- 台帳の出力（印刷対象なので no-print パネルの外に置く） -->
+  <div id="daichou"><p class="empty">「台帳を組む」を押すとここに出ます。</p></div>
 
   <!-- バックアップ -->
   <div class="panel no-print">
@@ -241,7 +274,7 @@
             </select>
             <label style="font-size:12px;color:#555">大きさ</label>
             <select id="e_size" onchange="renderBoardLive()">
-              <option value="small">小</option><option value="" selected>中</option><option value="large">大</option>
+              <option value="xs">特小</option><option value="small" selected>小</option><option value="">中</option><option value="large">大</option>
             </select>
             <label style="font-size:12px;color:#555"><input type="checkbox" id="e_show" checked onchange="renderBoardLive()"> 黒板を表示</label>
           </div>
@@ -260,6 +293,7 @@
             <div class="fld"><label>撮影日</label>
               <input type="date" id="e_date" onchange="renderBoardLive()"></div>
           </div>
+          <label style="font-size:12px;color:#555;display:inline-block;margin-top:6px"><input type="checkbox" id="e_showdate" onchange="renderBoardLive()"> 撮影日を黒板に出す（既定は出さない。台帳の情報欄には日付が残ります）</label>
           <div class="chips" id="koushuChips"></div>
 
           <details style="margin-top:10px">
@@ -385,9 +419,9 @@ async function addPhotos(files){
       const {dataURL,w,h}=await resizeToDataURL(f);
       const id=uid();
       const rec={ id, projectId:pid, full:dataURL, w, h,
-        koushu:lastKoushu||'', shubetsu:'', saibetsu:'', jokyo:'', date:todayISO(),
+        koushu:lastKoushu||'', shubetsu:'', saibetsu:'', jokyo:'', date:todayISO(), showDate:false,
         sokuten:'', shakou:(curProject().corp||'協電機工株式会社'), satsuei:lastSatsuei||'', tachiai:'', sunpou:'', comment:'',
-        pos:'bl', size:'', show:true, order:Date.now()+i };
+        pos:'bl', size:'small', show:true, order:Date.now()+i };
       await idbPut(rec);
     }catch(e){ fail++; console.warn('写真の取り込み失敗:',e); }
     i++; document.getElementById('countInfo').textContent='取り込み中… '+i+'/'+arr.length;
@@ -410,7 +444,7 @@ function boardText(r){
   if(r.sokuten) lines.push('位置：'+r.sokuten);
   if(r.sunpou) lines.push('寸法：'+r.sunpou);
   if(r.tachiai) lines.push('立会：'+r.tachiai);
-  if(r.date) lines.push(wareki(r.date));
+  if(r.showDate && r.date) lines.push(wareki(r.date)); // 撮影日は「出す」指定の時だけ黒板に載せる
   if(r.comment) lines.push(r.comment);
   return lines.join('\n');
 }
@@ -497,7 +531,8 @@ async function openEditor(id){
   e_jokyo.value=r.jokyo||''; e_date.value=r.date||todayISO();
   e_saibetsu.value=r.saibetsu||''; e_sokuten.value=r.sokuten||'';
   e_shakou.value=r.shakou||''; e_satsuei.value=r.satsuei||''; e_tachiai.value=r.tachiai||''; e_sunpou.value=r.sunpou||'';
-  e_comment.value=r.comment||''; e_pos.value=r.pos||'bl'; e_size.value=r.size||''; e_show.checked=r.show!==false;
+  e_comment.value=r.comment||''; e_pos.value=r.pos||'bl'; e_size.value=(r.size!=null?r.size:'small'); e_show.checked=r.show!==false;
+  e_showdate.checked=!!r.showDate;
   // 工種クイックチップ
   koushuChips.innerHTML=KOUSHU_QUICK.map(k=>'<span class="chip'+(k===r.koushu?' on':'')+'" onclick="pickKoushu(\''+esc(k).replace(/'/g,"\\'")+'\')">'+esc(k)+'</span>').join('');
   renderBoardLive();
@@ -515,7 +550,7 @@ function renderBoardLive(){
 }
 function collectEditor(){
   return { koushu:e_koushu.value, shubetsu:e_shubetsu.value, saibetsu:e_saibetsu.value,
-    jokyo:e_jokyo.value, date:e_date.value, sokuten:e_sokuten.value, shakou:e_shakou.value,
+    jokyo:e_jokyo.value, date:e_date.value, showDate:e_showdate.checked, sokuten:e_sokuten.value, shakou:e_shakou.value,
     satsuei:e_satsuei.value, tachiai:e_tachiai.value, sunpou:e_sunpou.value, comment:e_comment.value,
     pos:e_pos.value, size:e_size.value, show:e_show.checked };
 }
@@ -541,6 +576,9 @@ async function buildDaichou(){
   const per = layout==='a3-4'?4 : layout==='a3-6'?6 : 3;
   const gcls = layout==='a3-4'?'g4' : layout==='a3-6'?'g6' : 'g3';
   const pcls = layout==='a4-3'?'a4':'a3';
+  // 印刷の用紙サイズを台帳レイアウトに合わせて差し替え（写真がちゃんと印刷されるように）
+  document.getElementById('pagestyle').textContent =
+    (pcls==='a4') ? '@page{ size:A4 portrait; margin:8mm; }' : '@page{ size:A3 landscape; margin:8mm; }';
   // 工種グループ
   const groups={}; const order=[];
   all.forEach(r=>{ const k=r.koushu||'（工種なし）'; if(!groups[k]){groups[k]=[];order.push(k);} groups[k].push(r); });
@@ -571,7 +609,7 @@ async function buildDaichou(){
       for(const r of chunk){
         const url=r.full; // dataURL文字列
         const bt=esc(boardText(r));
-        const bp=r.show!==false?'<div class="board-daichou '+r.pos+'">'+bt+'</div>':'';
+        const bp=r.show!==false?'<div class="board-daichou '+(r.size?r.size+' ':'')+r.pos+'">'+bt+'</div>':'';
         html+='<div class="pcell"><div class="pimgwrap"><img src="'+url+'">'+bp+'</div>'
           +'<div class="pinfo">'
           +info('工種',[r.koushu,r.shubetsu].filter(Boolean).join('／'))
@@ -596,8 +634,9 @@ function burnBoard(rec){ return new Promise((res)=>{
     const ctx=cv.getContext('2d'); ctx.drawImage(img,0,0);
     if(rec.show!==false){
       const text=boardText(rec); const lines=text.split('\n');
-      const base=Math.max(14, Math.round(img.width/45));
-      const fs = rec.size==='small'?base*0.85 : rec.size==='large'?base*1.25 : base;
+      const base=Math.max(12, Math.round(img.width/50));
+      const scale = rec.size==='xs'?0.6 : rec.size==='small'?0.78 : rec.size==='large'?1.2 : 0.95;
+      const fs = base*scale;
       ctx.font='bold '+fs+'px "Yu Gothic","Meiryo",sans-serif';
       let tw=0; lines.forEach(l=>{ tw=Math.max(tw,ctx.measureText(l).width); });
       const padx=fs*0.6, pady=fs*0.5, lh=fs*1.35;
@@ -623,17 +662,21 @@ function strBytes(s){ return new TextEncoder().encode(s); }
 function makeZip(files){ // files:[{name,data(Uint8Array)}]
   const chunks=[]; const central=[]; let offset=0;
   const dosTime=0, dosDate=0x5021; // 固定日時 2020-01-01（Date未使用・Windowsで有効な値）
+  // ★日本語ファイル名の文字化け対策★
+  // 汎用フラグの11ビット目(0x0800)＝「ファイル名はUTF-8」の印。
+  // これが無いと解凍側が古い日本語コード(CP932)と誤解して「蟾・遯ヨ縺ェ」のように化ける。
+  const UTF8_FLAG=0x0800;
   for(const f of files){
     const name=strBytes(f.name); const data=f.data; const crc=crc32(data);
     const lh=new DataView(new ArrayBuffer(30));
-    lh.setUint32(0,0x04034b50,true); lh.setUint16(4,20,true); lh.setUint16(6,0,true);
+    lh.setUint32(0,0x04034b50,true); lh.setUint16(4,20,true); lh.setUint16(6,UTF8_FLAG,true);
     lh.setUint16(8,0,true); lh.setUint16(10,dosTime,true); lh.setUint16(12,dosDate,true);
     lh.setUint32(14,crc,true); lh.setUint32(18,data.length,true); lh.setUint32(22,data.length,true);
     lh.setUint16(26,name.length,true); lh.setUint16(28,0,true);
     chunks.push(new Uint8Array(lh.buffer),name,data);
     const ch=new DataView(new ArrayBuffer(46));
     ch.setUint32(0,0x02014b50,true); ch.setUint16(4,20,true); ch.setUint16(6,20,true);
-    ch.setUint16(8,0,true); ch.setUint16(10,0,true); ch.setUint16(12,dosTime,true); ch.setUint16(14,dosDate,true);
+    ch.setUint16(8,UTF8_FLAG,true); ch.setUint16(10,0,true); ch.setUint16(12,dosTime,true); ch.setUint16(14,dosDate,true);
     ch.setUint32(16,crc,true); ch.setUint32(20,data.length,true); ch.setUint32(24,data.length,true);
     ch.setUint16(28,name.length,true); ch.setUint16(30,0,true); ch.setUint16(32,0,true);
     ch.setUint16(34,0,true); ch.setUint16(36,0,true); ch.setUint32(38,0,true); ch.setUint32(42,offset,true);
