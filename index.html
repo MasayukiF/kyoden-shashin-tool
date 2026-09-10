@@ -283,13 +283,17 @@
           <!-- 基本欄 -->
           <div class="grid" style="grid-template-columns:1fr 1fr">
             <div class="fld"><label>工種</label>
-              <select id="e_koushu" onchange="onKoushuChange()"></select></div>
+              <select id="e_koushu" onchange="onKoushuChange()"></select>
+              <input type="text" id="e_koushu_txt" placeholder="工種を入力" hidden oninput="renderBoardLive()"></div>
             <div class="fld"><label>種別</label>
-              <select id="e_shubetsu" onchange="renderBoardLive()"></select></div>
+              <select id="e_shubetsu" onchange="onFreeToggle('shubetsu')"></select>
+              <input type="text" id="e_shubetsu_txt" placeholder="種別を入力" hidden oninput="renderBoardLive()"></div>
             <div class="fld"><label>施工状況</label>
-              <select id="e_jokyo" onchange="renderBoardLive()">
+              <select id="e_jokyo" onchange="onFreeToggle('jokyo')">
                 <option value="">（選択）</option><option>施工前</option><option>施工中</option><option>施工後</option><option>立会確認</option>
-              </select></div>
+                <option value="__free__">✏ その他（手入力）</option>
+              </select>
+              <input type="text" id="e_jokyo_txt" placeholder="施工状況を入力" hidden oninput="renderBoardLive()"></div>
             <div class="fld"><label>撮影日</label>
               <input type="date" id="e_date" onchange="renderBoardLive()"></div>
           </div>
@@ -461,20 +465,44 @@ async function renderAlbums(){
   let html='';
   for(const k of Object.keys(groups)){
     html+='<div class="album"><h3>'+esc(k)+'（'+groups[k].length+'枚）</h3><div class="gallery">';
-    for(const r of groups[k]){
+    const last=groups[k].length-1;
+    groups[k].forEach((r,idx)=>{
       const url=r.full; // dataURL文字列
       const bt=esc(boardText(r));
-      const bp=r.show!==false ? '<div class="board-preview '+r.pos+'">'+bt+'</div>' : '';
+      const bp=r.show!==false ? '<div class="board-preview '+(r.size?r.size+' ':'')+r.pos+'">'+bt+'</div>' : '';
       html+='<div class="card">'
-        +'<div class="thumbwrap" onclick="openEditor(\''+r.id+'\')"><img src="'+url+'">'+bp+'</div>'
+        +'<div class="thumbwrap" onclick="openEditor(\''+r.id+'\')"><img src="'+url+'">'
+        +'<span class="badge">'+(idx+1)+'</span>'+bp+'</div>'
         +'<div class="cap"><b>'+esc(r.shubetsu||r.jokyo||'（黒板未設定）')+'</b><br>'+esc(wareki(r.date))+'</div>'
-        +'<div class="cardacts"><button class="mini" onclick="openEditor(\''+r.id+'\')">黒板</button>'
-        +'<button class="mini danger" onclick="delPhoto(\''+r.id+'\')">削除</button></div>'
+        // 並び替え：同じ工種の中で前後に入れ替える（台帳の並びがそのまま変わる）
+        +'<div class="cardacts">'
+        +'<button class="mini" title="前へ"'+(idx===0?' disabled':'')+' onclick="movePhoto(\''+r.id+'\',-1)">←</button>'
+        +'<button class="mini" onclick="openEditor(\''+r.id+'\')">黒板</button>'
+        +'<button class="mini" title="後へ"'+(idx===last?' disabled':'')+' onclick="movePhoto(\''+r.id+'\',1)">→</button>'
+        +'<button class="mini danger" onclick="delPhoto(\''+r.id+'\')">削除</button>'
+        +'</div>'
         +'</div>';
-    }
+    });
     html+='</div></div>';
   }
   wrap.innerHTML=html;
+}
+/* ---- 写真の並び替え（同じ工種の中で前後に移動）----
+   台帳は order の昇順で並ぶので、ここを入れ替えると台帳の並びもそのまま変わる。
+   グループが持っている order 値の集合はそのまま使い回して順番だけ入れ替えるので、
+   他の工種グループの並びには影響しない。 */
+async function movePhoto(id,dir){
+  const all=(await idbAll()).filter(r=>r.projectId===state.currentId);
+  all.sort((a,b)=>(a.order||0)-(b.order||0));
+  const kf=r=>r.koushu||'（工種なし）';
+  const me=all.find(r=>r.id===id); if(!me) return;
+  const grp=all.filter(r=>kf(r)===kf(me));
+  const i=grp.findIndex(r=>r.id===id), j=i+dir;
+  if(i<0||j<0||j>=grp.length) return; // 端では何もしない
+  const orders=grp.map((r,k)=>(r.order!=null?r.order:k)).slice().sort((a,b)=>a-b);
+  [grp[i],grp[j]]=[grp[j],grp[i]];
+  for(let k=0;k<grp.length;k++){ grp[k].order=orders[k]; await idbPut(grp[k]); }
+  await renderAlbums();
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
@@ -515,20 +543,58 @@ document.getElementById('projSel').addEventListener('change',e=>{
 
 /* ---- エディタ ---- */
 let editId=null, lastKoushu='', lastSatsuei='';
-function fillKoushuSelect(sel,val){
-  sel.innerHTML='<option value="">（選択）</option>'+KOUSHU_QUICK.map(k=>'<option'+(k===val?' selected':'')+'>'+esc(k)+'</option>').join('');
-}
-function onKoushuChange(){
-  const k=e_koushu.value; const subs=KOUSHU_MASTER[k]||[];
-  e_shubetsu.innerHTML='<option value="">（選択）</option>'+subs.map(s=>'<option>'+esc(s)+'</option>').join('');
+/* ---- 選択 or 手入力（工種・種別・施工状況）----
+   選択肢に「✏ その他（手入力）」を用意し、選ぶと隣のテキスト欄が出る。
+   マスタに無い値（過去に手入力した値）を開いたときも自動で手入力側に切り替える。 */
+const FREE='__free__';
+const FREE_OPT='<option value="'+FREE+'">✏ その他（手入力）</option>';
+function freeInput(name){ return document.getElementById('e_'+name+'_txt'); }
+// 選択が「手入力」ならテキスト欄を出す／しまう（ユーザーが選択を変えたとき用）
+function onFreeToggle(name){
+  const sel=document.getElementById('e_'+name), txt=freeInput(name);
+  txt.hidden = (sel.value!==FREE);
+  if(!txt.hidden) txt.focus(); // 手入力を選んだ時だけカーソルを置く
   renderBoardLive();
+}
+// 実際の値を取り出す（手入力ならテキスト欄の中身）
+function fieldValue(name){
+  const sel=document.getElementById('e_'+name), txt=freeInput(name);
+  return sel.value===FREE ? txt.value.trim() : sel.value;
+}
+// 保存値をセット（マスタに無ければ手入力側へ）
+function setFieldValue(name,val){
+  const sel=document.getElementById('e_'+name), txt=freeInput(name);
+  const v=val||'';
+  const known=[...sel.options].some(o=>o.value===v && o.value!==FREE);
+  if(v && !known){ sel.value=FREE; txt.value=v; txt.hidden=false; }
+  else { sel.value=v; txt.value=''; txt.hidden=true; }
+}
+function fillKoushuSelect(sel,val){
+  sel.innerHTML='<option value="">（選択）</option>'
+    +KOUSHU_QUICK.map(k=>'<option'+(k===val?' selected':'')+'>'+esc(k)+'</option>').join('')
+    +FREE_OPT;
+}
+// 種別の選択肢を組み立てるだけ（副作用なし）。工種を手入力した時は候補が無いので手入力のみになる。
+function rebuildShubetsuOptions(koushu){
+  const subs=KOUSHU_MASTER[koushu]||[];
+  e_shubetsu.innerHTML='<option value="">（選択）</option>'
+    +subs.map(s=>'<option>'+esc(s)+'</option>').join('')+FREE_OPT;
+}
+// 工種をユーザーが変えたとき
+function onKoushuChange(){
+  rebuildShubetsuOptions(fieldValue('koushu'));
+  const st=freeInput('shubetsu'); st.value=''; st.hidden=true; // 工種が変わったら種別はいったん白紙に
+  onFreeToggle('koushu');
 }
 async function openEditor(id){
   const r=await idbGet(id); if(!r) return; editId=id;
   previewImg.src=r.full; // dataURL文字列
   fillKoushuSelect(e_koushu, r.koushu);
-  onKoushuChange(); e_shubetsu.value=r.shubetsu||'';
-  e_jokyo.value=r.jokyo||''; e_date.value=r.date||todayISO();
+  setFieldValue('koushu', r.koushu);              // マスタに無い工種ならテキスト欄側に入る
+  rebuildShubetsuOptions(fieldValue('koushu'));   // その工種に応じた種別の候補を用意
+  setFieldValue('shubetsu', r.shubetsu);
+  setFieldValue('jokyo', r.jokyo);
+  e_date.value=r.date||todayISO();
   e_saibetsu.value=r.saibetsu||''; e_sokuten.value=r.sokuten||'';
   e_shakou.value=r.shakou||''; e_satsuei.value=r.satsuei||''; e_tachiai.value=r.tachiai||''; e_sunpou.value=r.sunpou||'';
   e_comment.value=r.comment||''; e_pos.value=r.pos||'bl'; e_size.value=(r.size!=null?r.size:'small'); e_show.checked=r.show!==false;
@@ -538,7 +604,7 @@ async function openEditor(id){
   renderBoardLive();
   document.getElementById('editorBg').classList.add('on');
 }
-function pickKoushu(k){ e_koushu.value=k; onKoushuChange();
+function pickKoushu(k){ setFieldValue('koushu',k); onKoushuChange();
   [...koushuChips.children].forEach(c=>c.classList.toggle('on',c.textContent===k));
 }
 function renderBoardLive(){
@@ -549,8 +615,9 @@ function renderBoardLive(){
   bl.textContent=boardText(r);
 }
 function collectEditor(){
-  return { koushu:e_koushu.value, shubetsu:e_shubetsu.value, saibetsu:e_saibetsu.value,
-    jokyo:e_jokyo.value, date:e_date.value, showDate:e_showdate.checked, sokuten:e_sokuten.value, shakou:e_shakou.value,
+  // 工種・種別・施工状況は「選択」か「手入力」のどちらかから値を取る
+  return { koushu:fieldValue('koushu'), shubetsu:fieldValue('shubetsu'), saibetsu:e_saibetsu.value,
+    jokyo:fieldValue('jokyo'), date:e_date.value, showDate:e_showdate.checked, sokuten:e_sokuten.value, shakou:e_shakou.value,
     satsuei:e_satsuei.value, tachiai:e_tachiai.value, sunpou:e_sunpou.value, comment:e_comment.value,
     pos:e_pos.value, size:e_size.value, show:e_show.checked };
 }
