@@ -216,16 +216,17 @@
     <div class="body">
       <div class="toolbar" style="margin-bottom:8px">
         <label style="font-size:12px;color:#555">レイアウト</label>
-        <select id="layoutSel">
+        <select id="layoutSel" onchange="saveDaichouPrefs()">
           <option value="a3-4">A3ヨコ・4枚/頁（既定・提出用）</option>
           <option value="a3-6">A3ヨコ・6枚/頁（枚数が多い時）</option>
           <option value="a4-3">A4タテ・3枚/頁（家庭/事務所プリンタ向け）</option>
         </select>
-        <label style="font-size:12px;color:#555"><input type="checkbox" id="coverChk" checked> 表紙をつける</label>
+        <label style="font-size:12px;color:#555"><input type="checkbox" id="coverChk" checked onchange="saveDaichouPrefs()"> 表紙をつける</label>
+        <label style="font-size:12px;color:#555"><input type="checkbox" id="dateChk" checked onchange="saveDaichouPrefs()"> 撮影日を入れる</label>
         <button class="primary" onclick="buildDaichou()">台帳を組む／更新</button>
         <button class="go" onclick="window.print()">🖨 印刷・PDF保存</button>
       </div>
-      <p class="hint">工種の切れ目で改ページします。iPhoneは印刷ボタン→（「自動的に印刷…」と出たら<b>「許可」</b>）→共有→プリント→ピンチアウトでPDF保存できます。</p>
+      <p class="hint">工種の切れ目で改ページします。「撮影日を入れる」を外すと、写真の横の情報欄から撮影日が消えます（黒板の日付とは別の設定です）。iPhoneは印刷ボタン→（「自動的に印刷…」と出たら<b>「許可」</b>）→共有→プリント→ピンチアウトでPDF保存できます。</p>
     </div>
   </div>
 
@@ -297,7 +298,7 @@
             <div class="fld"><label>撮影日</label>
               <input type="date" id="e_date" onchange="renderBoardLive()"></div>
           </div>
-          <label style="font-size:12px;color:#555;display:inline-block;margin-top:6px"><input type="checkbox" id="e_showdate" onchange="renderBoardLive()"> 撮影日を黒板に出す（既定は出さない。台帳の情報欄には日付が残ります）</label>
+          <label style="font-size:12px;color:#555;display:inline-block;margin-top:6px"><input type="checkbox" id="e_showdate" onchange="renderBoardLive()"> 撮影日を黒板に出す（既定は出さない。台帳の情報欄の日付は⑤の「撮影日を入れる」で切り替え）</label>
           <div class="chips" id="koushuChips"></div>
 
           <details style="margin-top:10px">
@@ -378,6 +379,18 @@ let state = { projects:[], currentId:null, seq:1 };
 const LS_KEY='shashin_state_v1';
 function loadState(){ try{ const s=localStorage.getItem(LS_KEY); if(s) state=JSON.parse(s); }catch(e){} }
 function saveState(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){} }
+/* ---- 台帳の設定（レイアウト／表紙／撮影日）を覚えておく ----
+   毎回選び直さなくて済むように、この端末に記憶する。 */
+function saveDaichouPrefs(){
+  state.daichou={ layout:layoutSel.value, cover:coverChk.checked, date:dateChk.checked };
+  saveState();
+}
+function loadDaichouPrefs(){
+  const d=state.daichou; if(!d) return;
+  if(d.layout) layoutSel.value=d.layout;
+  if(d.cover!=null) coverChk.checked=d.cover;
+  if(d.date!=null) dateChk.checked=d.date;
+}
 function uid(){ return 'p'+(Date.now().toString(36))+Math.floor(performance.now()*1000%1e6).toString(36)+(state.seq++); }
 function curProject(){ return state.projects.find(p=>p.id===state.currentId); }
 
@@ -681,7 +694,8 @@ async function buildDaichou(){
           +'<div class="pinfo">'
           +info('工種',[r.koushu,r.shubetsu].filter(Boolean).join('／'))
           +info('細別',r.saibetsu)+info('状況',r.jokyo)+info('位置',r.sokuten)
-          +info('撮影日',wareki(r.date))+info('立会',r.tachiai)+info('寸法',r.sunpou)
+          +(dateChk.checked?info('撮影日',wareki(r.date)):'') // 「撮影日を入れる」のチェックで出し入れ
+          +info('立会',r.tachiai)+info('寸法',r.sunpou)
           +(r.comment?'<div>'+esc(r.comment)+'</div>':'')
           +'</div></div>';
       }
@@ -826,6 +840,7 @@ function init(){
   if(!state.projects.length){ newProject(); }
   else { if(!state.currentId) state.currentId=state.projects[0].id; renderProjSel(); fillProjFields(); }
   fillKoushuSelect(e_koushu,''); onKoushuChange();
+  loadDaichouPrefs(); // 前回の台帳設定を復元
   renderAlbums(); updateStoreInfo();
   // モーダル背景クリックで閉じる
   document.getElementById('editorBg').addEventListener('click',e=>{ if(e.target.id==='editorBg') closeEditor(); });
