@@ -177,6 +177,7 @@
         <div class="fld"><label>現場代理人</label><input type="text" id="p_agent" oninput="onProjField()"></div>
         <div class="fld"><label>受注者</label><input type="text" id="p_corp" value="協電機工株式会社" oninput="onProjField()"></div>
         <div class="fld"><label>契約工期</label><input type="text" id="p_period" placeholder="例）令和8年4月1日〜令和8年9月30日" oninput="onProjField()"></div>
+        <div class="fld"><label>台帳の作成日</label><input type="date" id="p_made" oninput="onProjField()" title="表紙に出る作成日。空にすると今日の日付が入ります"></div>
       </div>
       <p class="hint">工事名を入れておくと、黒板と台帳の見出しに自動で入ります。工事は複数持てます（現場ごとに切替）。</p>
     </div>
@@ -225,6 +226,7 @@
         <label style="font-size:12px;color:#555"><input type="checkbox" id="dateChk" checked onchange="saveDaichouPrefs()"> 撮影日を入れる</label>
         <button class="primary" onclick="buildDaichou()">台帳を組む／更新</button>
         <button class="go" onclick="window.print()">🖨 印刷・PDF保存</button>
+        <button id="xlsxBtn" onclick="exportExcel()">📗 Excelで保存</button>
       </div>
       <p class="hint">工種の切れ目で改ページします。「撮影日を入れる」を外すと、写真の横の情報欄から撮影日が消えます（黒板の日付とは別の設定です）。iPhoneは印刷ボタン→（「自動的に印刷…」と出たら<b>「許可」</b>）→共有→プリント→ピンチアウトでPDF保存できます。</p>
     </div>
@@ -528,11 +530,12 @@ function fillProjFields(){
   const p=curProject()||{};
   p_name.value=p.name||''; p_place.value=p.place||''; p_owner.value=p.owner||'';
   p_agent.value=p.agent||''; p_corp.value=p.corp||'協電機工株式会社'; p_period.value=p.period||'';
+  p_made.value=p.made||''; // 空なら台帳を組むとき今日の日付になる
 }
 function onProjField(){
   const p=curProject(); if(!p) return;
   p.name=p_name.value; p.place=p_place.value; p.owner=p_owner.value;
-  p.agent=p_agent.value; p.corp=p_corp.value; p.period=p_period.value;
+  p.agent=p_agent.value; p.corp=p_corp.value; p.period=p_period.value; p.made=p_made.value;
   saveState(); renderProjSel();
 }
 function newProject(){
@@ -674,7 +677,7 @@ async function buildDaichou(){
       +'<table>'
       +row('工事名',p.name)+row('工事場所',p.place)+row('発注者／元請',p.owner)
       +row('受注者',p.corp)+row('現場代理人',p.agent)+row('契約工期',p.period)
-      +'</table><p style="margin-top:30px;color:#555">'+esc(wareki(todayISO()))+' 作成</p></div></div>';
+      +'</table><p style="margin-top:30px;color:#555">'+esc(wareki(p.made||todayISO()))+' 作成</p></div></div>';
   }
   for(const k of order){
     const list=groups[k];
@@ -740,7 +743,7 @@ function burnBoard(rec){ return new Promise((res)=>{
 const _crcTab=(()=>{ const t=[]; for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c=c&1?0xEDB88320^(c>>>1):c>>>1; t[n]=c>>>0; } return t; })();
 function crc32(u8){ let c=0xFFFFFFFF; for(let i=0;i<u8.length;i++) c=_crcTab[(c^u8[i])&0xFF]^(c>>>8); return (c^0xFFFFFFFF)>>>0; }
 function strBytes(s){ return new TextEncoder().encode(s); }
-function makeZip(files){ // files:[{name,data(Uint8Array)}]
+function makeZip(files, mime){ // files:[{name,data(Uint8Array)}] / mime省略時はZIP
   const chunks=[]; const central=[]; let offset=0;
   const dosTime=0, dosDate=0x5021; // 固定日時 2020-01-01（Date未使用・Windowsで有効な値）
   // ★日本語ファイル名の文字化け対策★
@@ -771,7 +774,197 @@ function makeZip(files){ // files:[{name,data(Uint8Array)}]
   eo.setUint16(8,central.length,true); eo.setUint16(10,central.length,true);
   eo.setUint32(12,clen,true); eo.setUint32(16,cstart,true); eo.setUint16(20,0,true);
   chunks.push(new Uint8Array(eo.buffer));
-  return new Blob(chunks,{type:'application/zip'});
+  return new Blob(chunks,{type:mime||'application/zip'});
+}
+
+/* ==== Excel(.xlsx)書き出し ====
+   xlsxの正体は「XMLを集めたZIP」。ZIPは上のmakeZipがあるので、
+   必要なXMLを組み立てれば外部ライブラリ無しでExcelファイルが作れる。
+   写真は黒板を焼き込んだものを縮小してシートに貼り込む。 */
+function xmlEsc(s){
+  return String(s==null?'':s)
+    .replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]))
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,''); // Excelが嫌う制御文字を除去
+}
+function colName(n){ let s='',x=n+1; while(x>0){ const m=(x-1)%26; s=String.fromCharCode(65+m)+s; x=Math.floor((x-1)/26); } return s; }
+const EMU=9525; // 1px = 9525 EMU
+// dataURLをさらに小さくする（Excelが重くならないように）
+function shrinkDataURL(d,maxEdge=900,q=0.75){ return new Promise((res)=>{
+  const img=new Image();
+  img.onload=()=>{
+    let w=img.width,h=img.height;
+    if(!w||!h){ res({d,w:800,h:600}); return; }
+    if(Math.max(w,h)>maxEdge){ const r=maxEdge/Math.max(w,h); w=Math.round(w*r); h=Math.round(h*r); }
+    const cv=document.getElementById('workCanvas'); cv.width=w; cv.height=h;
+    const ctx=cv.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+    let out; try{ out=cv.toDataURL('image/jpeg',q); }catch(e){ out=d; }
+    res({d:out,w,h});
+  };
+  img.onerror=()=>res({d,w:800,h:600});
+  img.src=d;
+}); }
+
+async function exportExcel(){
+  const p=curProject()||{};
+  const all=(await idbAll()).filter(r=>r.projectId===state.currentId);
+  all.sort((a,b)=>(a.order||0)-(b.order||0));
+  if(!all.length){ alert('この工事に写真がありません。'); return; }
+
+  const btn=document.getElementById('xlsxBtn');
+  const label=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='作成中… 0/'+all.length; }
+  try{
+    // 列の構成（台帳の「撮影日を入れる」設定に合わせる）
+    const cols=[
+      {k:'連番', w:6,  v:(r,i)=>String(i+1)},
+      {k:'工種', w:22, v:r=>r.koushu},
+      {k:'種別', w:14, v:r=>r.shubetsu},
+      {k:'細別', w:14, v:r=>r.saibetsu},
+      {k:'施工状況', w:12, v:r=>r.jokyo},
+      {k:'測点位置', w:12, v:r=>r.sokuten},
+      {k:'撮影日', w:16, v:r=>wareki(r.date)},
+      {k:'立会', w:10, v:r=>r.tachiai},
+      {k:'寸法', w:12, v:r=>r.sunpou},
+      {k:'コメント', w:24, v:r=>r.comment},
+      {k:'写真', w:34, v:()=>''}
+    ].filter(c=>c.k!=='撮影日' || dateChk.checked);
+    const picCol=cols.length-1;
+
+    // 写真セルの枠（px）
+    const BOXW=240, BOXH=180;
+
+    // 画像を用意（黒板を焼き込み→縮小）
+    const media=[]; // {name, u8, w, h}
+    for(let i=0;i<all.length;i++){
+      const burned=await burnBoard(all[i]);
+      const s=await shrinkDataURL(burned);
+      media.push({name:'image'+(i+1)+'.jpeg', u8:dataURLtoU8(s.d), w:s.w, h:s.h});
+      if(btn) btn.textContent='作成中… '+(i+1)+'/'+all.length;
+    }
+
+    // --- シート本体 ---
+    const head=[
+      ['工事写真台帳'],
+      ['工事名', p.name||''],
+      ['工事場所', p.place||''],
+      ['発注者／元請', p.owner||''],
+      ['受注者', p.corp||''],
+      ['現場代理人', p.agent||''],
+      ['契約工期', p.period||''],
+      ['作成日', wareki(p.made||todayISO())],
+      []
+    ];
+    const rowsXml=[]; let rn=0;
+    const cell=(ci,ri,text,style)=>text===''||text==null ? ''
+      : '<c r="'+colName(ci)+ri+'" s="'+style+'" t="inlineStr"><is><t xml:space="preserve">'+xmlEsc(text)+'</t></is></c>';
+    // 見出し部
+    head.forEach(line=>{
+      rn++;
+      let cs=''; line.forEach((t,ci)=>{ cs+=cell(ci,rn,t, rn===1?2:(ci===0?1:0)); });
+      rowsXml.push('<row r="'+rn+'">'+cs+'</row>');
+    });
+    // 表ヘッダー
+    rn++;
+    const headerRow=rn;
+    rowsXml.push('<row r="'+rn+'" ht="20" customHeight="1">'+cols.map((c,ci)=>cell(ci,rn,c.k,3)).join('')+'</row>');
+    // データ行（写真1枚=1行）
+    const anchors=[]; const dataStart=rn+1;
+    all.forEach((r,i)=>{
+      rn++;
+      let cs=''; cols.forEach((c,ci)=>{ cs+=cell(ci,rn,c.v(r,i),4); });
+      rowsXml.push('<row r="'+rn+'" ht="'+(BOXH*0.75)+'" customHeight="1">'+cs+'</row>');
+      const m=media[i];
+      const sc=Math.min(BOXW/m.w, BOXH/m.h, 1);
+      anchors.push({row:rn-1, col:picCol, cx:Math.round(m.w*sc*EMU), cy:Math.round(m.h*sc*EMU), rid:'rId'+(i+1)});
+    });
+
+    const colsXml=cols.map((c,ci)=>'<col min="'+(ci+1)+'" max="'+(ci+1)+'" width="'+c.w+'" customWidth="1"/>').join('');
+    const sheet='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      +'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+      +'<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>'
+      +'<cols>'+colsXml+'</cols>'
+      +'<sheetData>'+rowsXml.join('')+'</sheetData>'
+      +'<autoFilter ref="A'+headerRow+':'+colName(cols.length-1)+(dataStart+all.length-1)+'"/>'
+      +'<pageMargins left="0.4" right="0.4" top="0.4" bottom="0.4" header="0.3" footer="0.3"/>'
+      +'<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>'
+      +'<drawing r:id="rIdDr"/></worksheet>';
+
+    const drawing='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      +'<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+      +anchors.map((a,i)=>'<xdr:oneCellAnchor>'
+        +'<xdr:from><xdr:col>'+a.col+'</xdr:col><xdr:colOff>'+(4*EMU)+'</xdr:colOff><xdr:row>'+a.row+'</xdr:row><xdr:rowOff>'+(4*EMU)+'</xdr:rowOff></xdr:from>'
+        +'<xdr:ext cx="'+a.cx+'" cy="'+a.cy+'"/>'
+        +'<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="'+(i+1)+'" name="写真'+(i+1)+'"/><xdr:cNvPicPr/></xdr:nvPicPr>'
+        +'<xdr:blipFill><a:blip r:embed="'+a.rid+'"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>'
+        +'<xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>'
+        +'<xdr:clientData/></xdr:oneCellAnchor>').join('')
+      +'</xdr:wsDr>';
+
+    const R='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const drawingRels='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      +'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      +media.map((m,i)=>'<Relationship Id="rId'+(i+1)+'" Type="'+R+'/image" Target="../media/'+m.name+'"/>').join('')
+      +'</Relationships>';
+
+    const styles='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      +'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+      +'<fonts count="3"><font><sz val="11"/><name val="ＭＳ Ｐゴシック"/></font>'
+      +'<font><b/><sz val="11"/><name val="ＭＳ Ｐゴシック"/></font>'
+      +'<font><b/><sz val="16"/><name val="ＭＳ Ｐゴシック"/></font></fonts>'
+      +'<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
+      +'<fill><patternFill patternType="solid"><fgColor rgb="FFEEF2F6"/><bgColor indexed="64"/></patternFill></fill></fills>'
+      +'<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
+      +'<border><left style="thin"><color rgb="FF808080"/></left><right style="thin"><color rgb="FF808080"/></right>'
+      +'<top style="thin"><color rgb="FF808080"/></top><bottom style="thin"><color rgb="FF808080"/></bottom><diagonal/></border></borders>'
+      +'<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+      +'<cellXfs count="5">'
+      +'<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'                                     // 0 通常
+      +'<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'                        // 1 太字
+      +'<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>'                        // 2 タイトル
+      +'<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>' // 3 表ヘッダー
+      +'<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>' // 4 データ
+      +'</cellXfs>'
+      +'<cellStyles count="1"><cellStyle name="標準" xfId="0" builtinId="0"/></cellStyles>' // 既定スタイル（無いとExcelが警告を出す）
+      +'</styleSheet>';
+
+    const files=[
+      {name:'[Content_Types].xml', data:strBytes('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        +'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        +'<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        +'<Default Extension="xml" ContentType="application/xml"/>'
+        +'<Default Extension="jpeg" ContentType="image/jpeg"/>'
+        +'<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        +'<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        +'<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        +'<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'
+        +'</Types>')},
+      {name:'_rels/.rels', data:strBytes('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        +'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        +'<Relationship Id="rId1" Type="'+R+'/officeDocument" Target="xl/workbook.xml"/></Relationships>')},
+      {name:'xl/workbook.xml', data:strBytes('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        +'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="'+R+'">'
+        +'<sheets><sheet name="写真台帳" sheetId="1" r:id="rId1"/></sheets></workbook>')},
+      {name:'xl/_rels/workbook.xml.rels', data:strBytes('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        +'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        +'<Relationship Id="rId1" Type="'+R+'/worksheet" Target="worksheets/sheet1.xml"/>'
+        +'<Relationship Id="rId2" Type="'+R+'/styles" Target="styles.xml"/></Relationships>')},
+      {name:'xl/worksheets/sheet1.xml', data:strBytes(sheet)},
+      {name:'xl/worksheets/_rels/sheet1.xml.rels', data:strBytes('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        +'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        +'<Relationship Id="rIdDr" Type="'+R+'/drawing" Target="../drawings/drawing1.xml"/></Relationships>')},
+      {name:'xl/drawings/drawing1.xml', data:strBytes(drawing)},
+      {name:'xl/drawings/_rels/drawing1.xml.rels', data:strBytes(drawingRels)},
+      {name:'xl/styles.xml', data:strBytes(styles)}
+    ];
+    media.forEach(m=>files.push({name:'xl/media/'+m.name, data:m.u8}));
+
+    const blob=makeZip(files,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    dl(blob,(p.name||'工事写真')+'_写真台帳.xlsx');
+  }catch(e){
+    alert('Excelの作成に失敗しました：'+e.message);
+    console.error(e);
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent=label; }
+  }
 }
 
 async function exportPhotosZip(){
