@@ -49,7 +49,9 @@
 
   /* ギャラリー */
   .albums .album{ margin-bottom:14px; }
-  .albums .album h3{ font-size:13px; margin:0 0 6px; padding:4px 8px; background:#f3efe1; border-left:4px solid #c9a86a; border-radius:3px; }
+  .albums .album h3{ font-size:13px; margin:0 0 6px; padding:4px 8px; background:#f3efe1; border-left:4px solid #c9a86a; border-radius:3px; display:flex; align-items:center; gap:8px; }
+  .albums .album h3 .gmove{ margin-left:auto; display:flex; gap:4px; }
+  .albums .album h3 .gmove button{ padding:2px 8px; font-size:12px; line-height:1.2; }
   .gallery{ display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px; }
   .card{ border:1px solid #d6dbe1; border-radius:8px; overflow:hidden; background:#fff; position:relative; }
   .card .thumbwrap{ position:relative; width:100%; aspect-ratio:4/3; background:#eceff2; overflow:hidden; cursor:pointer; }
@@ -474,12 +476,18 @@ async function renderAlbums(){
   all.sort((a,b)=>(a.order||0)-(b.order||0));
   document.getElementById('countInfo').textContent='この工事の写真：'+all.length+'枚';
   if(!all.length){ wrap.innerHTML='<p class="empty">まだ写真がありません。②から撮る／選ぶで追加してください。</p>'; return; }
-  // 工種でグループ
+  // 工種でグループ（並びはorder順＝その工種の最初の写真の順番）
   const groups={};
   all.forEach(r=>{ const k=r.koushu||'（工種なし）'; (groups[k]=groups[k]||[]).push(r); });
+  const keys=Object.keys(groups);
   let html='';
-  for(const k of Object.keys(groups)){
-    html+='<div class="album"><h3>'+esc(k)+'（'+groups[k].length+'枚）</h3><div class="gallery">';
+  keys.forEach((k,gi)=>{
+    // 工種そのものを上下に動かすボタン（台帳の工種の並び順がそのまま変わる）
+    const gmove='<span class="gmove">'
+      +'<button class="mini" title="この工種を上へ"'+(gi===0?' disabled':'')+' onclick="moveGroup('+gi+',-1)">▲</button>'
+      +'<button class="mini" title="この工種を下へ"'+(gi===keys.length-1?' disabled':'')+' onclick="moveGroup('+gi+',1)">▼</button>'
+      +'</span>';
+    html+='<div class="album"><h3>'+esc(k)+'（'+groups[k].length+'枚）'+gmove+'</h3><div class="gallery">';
     const last=groups[k].length-1;
     groups[k].forEach((r,idx)=>{
       const url=r.full; // dataURL文字列
@@ -499,8 +507,24 @@ async function renderAlbums(){
         +'</div>';
     });
     html+='</div></div>';
-  }
+  });
   wrap.innerHTML=html;
+}
+/* ---- 工種グループごと上下に移動 ----
+   工種で分けたあとに工種の順番を間違えた場合、これまでは工種を付け直すか
+   作り直すしかなかった。ここでグループ単位に入れ替えられるようにする。
+   入れ替えたあと order を通し番号で振り直すので、台帳の工種の並びもそのまま変わる。 */
+async function moveGroup(gi,dir){
+  const all=(await idbAll()).filter(r=>r.projectId===state.currentId);
+  all.sort((a,b)=>(a.order||0)-(b.order||0));
+  const groups={}; const keys=[];
+  all.forEach(r=>{ const k=r.koushu||'（工種なし）'; if(!groups[k]){groups[k]=[];keys.push(k);} groups[k].push(r); });
+  const j=gi+dir;
+  if(gi<0||gi>=keys.length||j<0||j>=keys.length) return; // 端では何もしない
+  [keys[gi],keys[j]]=[keys[j],keys[gi]];
+  let n=0;
+  for(const k of keys){ for(const r of groups[k]){ r.order=n++; await idbPut(r); } }
+  await renderAlbums();
 }
 /* ---- 写真の並び替え（同じ工種の中で前後に移動）----
    台帳は order の昇順で並ぶので、ここを入れ替えると台帳の並びもそのまま変わる。
