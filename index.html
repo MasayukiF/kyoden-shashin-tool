@@ -15,6 +15,7 @@
   h1{ font-size:18px; margin:0; }
   header.app{ background:#1f3a5f; color:#fff; padding:10px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   header.app .sub{ font-size:12px; opacity:.85; }
+  header.app .ver{ margin-left:auto; font-size:12px; background:rgba(255,255,255,.15); border-radius:10px; padding:2px 10px; white-space:nowrap; }
   .wrap{ padding:14px 16px 80px; max-width:1100px; margin:0 auto; }
   .panel{ background:#fff; border:1px solid #d6dbe1; border-radius:8px; margin-bottom:14px; }
   .panel > h2{ font-size:14px; margin:0; padding:8px 12px; background:#eef2f6; border-bottom:1px solid #d6dbe1; border-radius:8px 8px 0 0; }
@@ -158,6 +159,8 @@
 <header class="app">
   <h1>工事写真アプリ</h1>
   <span class="sub">協電機工株式会社｜撮る→黒板→整理→台帳PDF。写真は端末内だけに保存（外に出しません）</span>
+  <!-- 版の日付。改修のたびに必ず更新する（「反映されたか／古い画面を見ていないか」をこれで確かめる） -->
+  <span class="ver">版 2026-10-09</span>
 </header>
 
 <div class="wrap">
@@ -282,6 +285,9 @@
               <option value="xs">特小</option><option value="small" selected>小</option><option value="">中</option><option value="large">大</option>
             </select>
             <label style="font-size:12px;color:#555"><input type="checkbox" id="e_show" checked onchange="renderBoardLive()"> 黒板を表示</label>
+            <label style="font-size:12px;color:#555">写真の向き</label>
+            <button class="mini" title="左に90度回す" onclick="rotateCurrent(-1)">↺ 左</button>
+            <button class="mini" title="右に90度回す" onclick="rotateCurrent(1)">↻ 右</button>
           </div>
         </div>
         <div>
@@ -408,23 +414,119 @@ function todayISO(){ const d=new Date(); const z=n=>String(n).padStart(2,'0'); r
 /* ---- 画像を縮小してdataURL化 ----
    ※ iOS SafariはIndexedDBにBlobを入れると読み出し時に空になる不具合があるため、
      画像は dataURL（文字列）で保存する。文字列はどのブラウザでも確実に往復できる。 */
-function resizeToDataURL(file, maxEdge=1920, quality=0.8){ return new Promise((res,rej)=>{
+/* ==== 写真の向き（EXIF Orientation）対策 ====
+   iPhoneの写真は「ピクセルは横のまま、表示時に回して」という向き情報(EXIF)を持つことがある。
+   最近のブラウザはこれを自動で適用するが、環境によっては適用されず、
+   縦になったり上下逆になったりする（崎元さんの報告）。
+   ただし自動適用する環境で自前でも回すと「二重回転」で逆に壊れるため、
+   起動時に実測して、適用されない環境でだけ自前で補正する。 */
+let EXIF_AUTO=true; // ブラウザがEXIFの向きを自動適用するか（安全側=trueで初期化）
+function detectExifAuto(){ return new Promise(res=>{
+  // 2x1(横長)にorientation=6を付けた画像。自動適用されるなら1x2(縦長)として読まれる
+  const img=new Image();
+  img.onload =()=>res(img.naturalWidth===1 && img.naturalHeight===2);
+  img.onerror=()=>res(true); // 判定できないときは補正しない（現状維持＝壊さない）
+  img.src='data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAYAAAAAAAD/2wBDACgcHiMeGSgjISMtKygwPGRBPDc3PHtYXUlkkYCZlo+AjIqgtObDoKrarYqMyP/L2u71////m8H////6/+b9//j/2wBDASstLTw1PHZBQXb4pYyl+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj/wAARCAABAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ALIAP//Z';
+}); }
+// JPEGの先頭からEXIFのOrientation(1〜8)だけ読む。読めなければ1(そのまま)
+function readExifOrientation(file){ return new Promise(res=>{
+  const fr=new FileReader();
+  fr.onload=()=>{
+    try{
+      const v=new DataView(fr.result);
+      if(v.byteLength<4 || v.getUint16(0)!==0xFFD8){ res(1); return; } // JPEGでない
+      let off=2;
+      while(off+4<=v.byteLength){
+        const marker=v.getUint16(off);
+        if((marker&0xFF00)!==0xFF00){ break; }
+        const len=v.getUint16(off+2);
+        if(marker===0xFFE1 && off+10<=v.byteLength && v.getUint32(off+4)===0x45786966){ // "Exif"
+          const tiff=off+10;
+          if(tiff+8>v.byteLength){ res(1); return; }
+          const little=v.getUint16(tiff)===0x4949;
+          const ifd=tiff+v.getUint32(tiff+4,little);
+          if(ifd+2>v.byteLength){ res(1); return; }
+          const n=v.getUint16(ifd,little);
+          for(let i=0;i<n;i++){
+            const e=ifd+2+i*12;
+            if(e+12>v.byteLength) break;
+            if(v.getUint16(e,little)===0x0112){ res(v.getUint16(e+8,little)||1); return; }
+          }
+          res(1); return;
+        }
+        off+=2+len;
+      }
+      res(1);
+    }catch(e){ res(1); }
+  };
+  fr.onerror=()=>res(1);
+  fr.readAsArrayBuffer(file.slice(0,128*1024)); // 向き情報は先頭にあるので冒頭だけで足りる
+}); }
+
+function resizeToDataURL(file, maxEdge=1920, quality=0.8){ return new Promise(async(res,rej)=>{
+  // 自動適用されない環境でだけ、自前で向きを直す
+  let ori=1;
+  if(!EXIF_AUTO){ try{ ori=await readExifOrientation(file); }catch(e){ ori=1; } }
   const img=new Image(); const url=URL.createObjectURL(file);
   img.onload=()=>{
-    let {width:w,height:h}=img;
+    let w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
     if(!w||!h){ URL.revokeObjectURL(url); rej(new Error('画像サイズを取得できませんでした')); return; }
     if(Math.max(w,h)>maxEdge){ const r=maxEdge/Math.max(w,h); w=Math.round(w*r); h=Math.round(h*r); }
-    const cv=document.getElementById('workCanvas'); cv.width=w; cv.height=h;
-    const ctx=cv.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+    const swap=(ori>=5&&ori<=8); // 90度系は縦横が入れ替わる
+    const cv=document.getElementById('workCanvas');
+    cv.width = swap?h:w; cv.height = swap?w:h;
+    const ctx=cv.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,cv.width,cv.height);
+    switch(ori){
+      case 2: ctx.translate(w,0); ctx.scale(-1,1); break;
+      case 3: ctx.translate(w,h); ctx.rotate(Math.PI); break;
+      case 4: ctx.translate(0,h); ctx.scale(1,-1); break;
+      case 5: ctx.rotate(Math.PI/2); ctx.scale(1,-1); break;
+      case 6: ctx.translate(h,0); ctx.rotate(Math.PI/2); break;
+      case 7: ctx.translate(h,0); ctx.rotate(Math.PI/2); ctx.translate(w,0); ctx.scale(-1,1); break;
+      case 8: ctx.translate(0,w); ctx.rotate(-Math.PI/2); break;
+    }
+    ctx.drawImage(img,0,0,w,h);
     URL.revokeObjectURL(url);
     let dataURL;
     try{ dataURL=cv.toDataURL('image/jpeg',quality); }catch(e){ rej(e); return; }
     if(!dataURL || dataURL.length<100){ rej(new Error('画像を変換できませんでした')); return; }
-    res({dataURL,w,h});
+    res({dataURL, w:cv.width, h:cv.height});
   };
   img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error('画像を読めませんでした（対応していない形式かもしれません）')); };
   img.src=url;
 }); }
+
+/* ---- 写真を90度ずつ回す（向きが変なときに手で直せるように）---- */
+function rotateDataURL(d,dir){ return new Promise(res=>{ // dir:-1=左(反時計) / 1=右(時計)
+  const img=new Image();
+  img.onload=()=>{
+    const w=img.naturalWidth, h=img.naturalHeight;
+    const cv=document.getElementById('workCanvas');
+    cv.width=h; cv.height=w; // 90度回すと縦横が入れ替わる
+    const ctx=cv.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,cv.width,cv.height);
+    if(dir>0){ ctx.translate(h,0); ctx.rotate(Math.PI/2); }
+    else      { ctx.translate(0,w); ctx.rotate(-Math.PI/2); }
+    ctx.drawImage(img,0,0);
+    let out; try{ out=cv.toDataURL('image/jpeg',0.85); }catch(e){ out=d; }
+    res({dataURL:out, w:h, h:w});
+  };
+  img.onerror=()=>res({dataURL:d,w:0,h:0});
+  img.src=d;
+}); }
+// 黒板編集画面で開いている写真を回す。画像そのものを回して保存するので
+// 黒板の焼き込み・台帳・Excel・ZIPの全部に反映される。
+async function rotateCurrent(dir){
+  if(!editId) return;
+  const r=await idbGet(editId); if(!r) return;
+  const rot=await rotateDataURL(r.full,dir);
+  if(!rot.w){ alert('写真を回せませんでした。'); return; }
+  r.full=rot.dataURL; r.w=rot.w; r.h=rot.h;
+  await idbPut(r);
+  previewImg.src=r.full; // プレビューを更新（編集中の黒板の入力内容はそのまま残る）
+  renderAlbums();
+}
 function dataURLtoU8(d){ const b64=d.split(',')[1]||''; const s=atob(b64); const u=new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }
 
 /* ---- 写真追加 ---- */
@@ -1058,6 +1160,7 @@ function init(){
   else { if(!state.currentId) state.currentId=state.projects[0].id; renderProjSel(); fillProjFields(); }
   fillKoushuSelect(e_koushu,''); onKoushuChange();
   loadDaichouPrefs(); // 前回の台帳設定を復元
+  detectExifAuto().then(v=>{ EXIF_AUTO=v; }); // 写真の向きを自前で直す必要がある環境か判定
   renderAlbums(); updateStoreInfo();
   // モーダル背景クリックで閉じる
   document.getElementById('editorBg').addEventListener('click',e=>{ if(e.target.id==='editorBg') closeEditor(); });
