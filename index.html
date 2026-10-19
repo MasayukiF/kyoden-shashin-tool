@@ -158,9 +158,9 @@
 <body>
 <header class="app">
   <h1>工事写真アプリ</h1>
-  <span class="sub">協電機工株式会社｜撮る→黒板→整理→台帳PDF。写真は端末内だけに保存（外に出しません）</span>
+  <span class="sub">撮る→黒板→整理→台帳PDF。写真は端末内だけに保存（外に出しません）｜作成：協電機工株式会社</span>
   <!-- 版の日付。改修のたびに必ず更新する（「反映されたか／古い画面を見ていないか」をこれで確かめる） -->
-  <span class="ver">版 2026-10-09</span>
+  <span class="ver">版 2026-10-19</span>
 </header>
 
 <div class="wrap">
@@ -180,7 +180,7 @@
         <div class="fld"><label>工事場所</label><input type="text" id="p_place" placeholder="例）熊本市中央区…" oninput="onProjField()"></div>
         <div class="fld"><label>発注者／元請</label><input type="text" id="p_owner" oninput="onProjField()"></div>
         <div class="fld"><label>現場代理人</label><input type="text" id="p_agent" oninput="onProjField()"></div>
-        <div class="fld"><label>受注者</label><input type="text" id="p_corp" value="協電機工株式会社" oninput="onProjField()"></div>
+        <div class="fld"><label>受注者</label><input type="text" id="p_corp" placeholder="例）○○設備株式会社（自分の会社名）" oninput="onProjField()"></div>
         <div class="fld"><label>契約工期</label><input type="text" id="p_period" placeholder="例）令和8年4月1日〜令和8年9月30日" oninput="onProjField()"></div>
         <div class="fld"><label>台帳の作成日</label><input type="date" id="p_made" oninput="onProjField()" title="表紙に出る作成日。空にすると今日の日付が入ります"></div>
       </div>
@@ -201,6 +201,7 @@
         </label>
       </div>
       <p class="hint">選んだ写真は自動で軽くして（長辺1920px）端末内に保存します。ネットが無くても撮影・保存・黒板つけはできます。台帳の印刷/PDFだけ電波のある所で。</p>
+      <p class="hint" style="color:#8a5a00">※「カメラで撮る」で撮った写真は、iPhoneの写真アプリには残りません（このアプリの中だけ）。元の写真も残したいときは、いつものカメラで撮ってから「写真を選ぶ」で入れてください。</p>
       <p class="hint" id="storeInfo"></p>
     </div>
   </div>
@@ -543,7 +544,7 @@ async function addPhotos(files){
       const id=uid();
       const rec={ id, projectId:pid, full:dataURL, w, h,
         koushu:lastKoushu||'', shubetsu:'', saibetsu:'', jokyo:'', date:todayISO(), showDate:false,
-        sokuten:'', shakou:(curProject().corp||'協電機工株式会社'), satsuei:lastSatsuei||'', tachiai:'', sunpou:'', comment:'',
+        sokuten:'', shakou:(curProject().corp||''), satsuei:lastSatsuei||'', tachiai:'', sunpou:'', comment:'',
         pos:'bl', size:'small', show:true, order:Date.now()+i };
       await idbPut(rec);
     }catch(e){ fail++; console.warn('写真の取り込み失敗:',e); }
@@ -655,17 +656,25 @@ function renderProjSel(){
 function fillProjFields(){
   const p=curProject()||{};
   p_name.value=p.name||''; p_place.value=p.place||''; p_owner.value=p.owner||'';
-  p_agent.value=p.agent||''; p_corp.value=p.corp||'協電機工株式会社'; p_period.value=p.period||'';
+  p_agent.value=p.agent||''; p_corp.value=p.corp||''; p_period.value=p.period||'';
   p_made.value=p.made||''; // 空なら台帳を組むとき今日の日付になる
 }
 function onProjField(){
   const p=curProject(); if(!p) return;
   p.name=p_name.value; p.place=p_place.value; p.owner=p_owner.value;
   p.agent=p_agent.value; p.corp=p_corp.value; p.period=p_period.value; p.made=p_made.value;
+  if(p.corp) state.lastCorp=p.corp; // 次の工事の受注者に使う
   saveState(); renderProjSel();
 }
+// 受注者は「前に入れた自分の会社名」を引き継ぐ。初めて使う人は空から。
+// （以前からの利用者は lastCorp が無いので、最後の工事の受注者を使う）
+function lastCorp(){
+  if(state.lastCorp) return state.lastCorp;
+  for(let i=state.projects.length-1;i>=0;i--){ if(state.projects[i].corp) return state.projects[i].corp; }
+  return '';
+}
 function newProject(){
-  const p={ id:uid(), name:'', place:'', owner:'', agent:'', corp:'協電機工株式会社', period:'' };
+  const p={ id:uid(), name:'', place:'', owner:'', agent:'', corp:lastCorp(), period:'' };
   state.projects.push(p); state.currentId=p.id; saveState();
   renderProjSel(); fillProjFields(); renderAlbums();
 }
